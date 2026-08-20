@@ -1,0 +1,20 @@
+{
+  "_comment": [
+    "Maps what the bot needs to the Trello custom fields on your board.",
+    "Each key lists accepted field names (case- and space-insensitive) so you do",
+    "not have to rename existing fields. Add your own names to the front of a list.",
+    "Only sheetUrl and goLiveDate are strictly required to build a message;",
+    "discordChannelId is required to send on Discord, agentPhone to send by SMS."
+  ],
+  "clientName": ["Client Name", "Client", "Account Name", "Business Name"],
+  "campaignName": ["Campaign", "Campaign Name", "Setup Type", "Service"],
+  "discordChannelId": ["Discord Channel ID", "Discord Channel", "Setup Channel"],
+  "agentDiscordId": ["Agent Discord ID", "Discord User ID", "Agent Discord"],
+  "agentName": ["Agent Name", "Agent", "Contact Name", "Point of Contact"],
+  "agentPhone": ["Agent Phone", "Phone", "Mobile", "Cell", "SMS Number"],
+  "sheetUrl": ["Google Sheet", "Google Sheet URL", "Sheet Link", "Sheet URL", "Tracking Sheet"],
+  "hubUrl": ["Hub Link", "Hub URL", "Internal Hub", "Hub Record"],
+  "goLiveDate": ["Go Live Date", "Go-Live Date", "Launch Date", "Live Date"],
+  "goLiveTime": ["Go Live Time", "Launch Time", "Live Time"],
+  "timezoneLabel": ["Timezone", "Time Zone", "TZ"]
+}

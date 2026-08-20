@@ -1,0 +1,14 @@
+{
+  "_comment": [
+    "Client-facing copy. Edit freely - the bot re-reads this file on every draft.",
+    "{placeholder} is filled from the Trello card. [[ ... ]] wraps an optional",
+    "chunk that disappears when a placeholder inside it is empty, so a card",
+    "without a launch time or hub link still reads naturally.",
+    "Available: agentMention, agentName, clientName, campaignLabel, teamName,",
+    "goLiveLong, goLiveShort, goLiveWeekday, goLiveRelative, goLiveTime,",
+    "timezoneLabel, sheetUrl, hubUrl"
+  ],
+  "discord": "Hey {agentMention} 👋\n\nYour {campaignLabel} is complete on our end and ready to go live **{goLiveLong}**[[ at {goLiveTime}]][[ {timezoneLabel}]].\n\n📄 **Your sheet:** {sheetUrl}\n[[🔗 **Your hub:** {hubUrl}\n]]\nCould you confirm {goLiveWeekday} works on your end? If you'd rather launch a different day, just let us know here and we'll move it.\n\n— {teamName}",
+  "sms": "Hi[[ {agentName}]], this is {teamName}. Your {campaignLabel} is complete and ready to go live {goLiveShort}[[ at {goLiveTime}]][[ {timezoneLabel}]]. Your sheet: {sheetUrl} Please reply to confirm the launch date works for you. Thanks!",
+  "smsNudge": "Hi[[ {agentName}]], following up from {teamName} - your setup is ready to go live {goLiveShort}. Details are in your Discord channel. Please reply here to confirm the date works. Thanks!"
+}

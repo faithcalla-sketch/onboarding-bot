@@ -1,0 +1,20 @@
+{
+  "name": "onboarding-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Notifies clients on Discord (with RingCentral SMS fallback) when their Trello setup is ready to go live.",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "register": "node scripts/register-commands.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5"
+  }
+}
