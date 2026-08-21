@@ -6,6 +6,7 @@ import {
 } from 'discord.js';
 import { formatLong, relativeLabel, todayInZone } from '../dates.js';
 import { estimateSegments } from '../services/ringcentral.js';
+import { SOURCE_LABELS } from '../message.js';
 import { config } from '../config.js';
 
 export const ACTIONS = {
@@ -56,7 +57,10 @@ function deliveryLine(record) {
   const lines = [];
   if (draft.channelId) {
     const mention = draft.agentDiscordId ? ` — mentions <@${draft.agentDiscordId}>` : ' — no @mention';
-    lines.push(`💬 <#${draft.channelId}>${mention}`);
+    const viaName = draft.channelName ? ` (matched \`#${draft.channelName}\`)` : '';
+    lines.push(`💬 <#${draft.channelId}>${viaName}${mention}`);
+  } else if (draft.channelName) {
+    lines.push(`💬 the update says \`#${draft.channelName}\`, which the bot cannot find`);
   } else {
     lines.push('💬 no Discord channel on the card');
   }
@@ -72,6 +76,22 @@ function deliveryLine(record) {
   return lines.join('\n');
 }
 
+/**
+ * Says where the three values that matter actually came from. A date parsed out
+ * of prose deserves more scrutiny than one typed into a named field, and the
+ * person approving should be able to see the difference at a glance.
+ */
+function readFromLine(draft) {
+  const sources = draft.sources || {};
+  const rows = [
+    ['Go-live date', sources.goLiveDate],
+    ['Sheet link', sources.sheetUrl],
+    ['Discord channel', sources.channelId],
+  ].filter(([, source]) => source);
+  if (!rows.length) return '';
+  return rows.map(([label, source]) => `${label}: ${SOURCE_LABELS[source] || source}`).join('\n');
+}
+
 function statusLine(record) {
   const bits = [];
   if (record.discord?.sent) {
@@ -84,7 +104,7 @@ function statusLine(record) {
   if (record.ack) {
     bits.push(`🎉 Client replied <t:${Math.floor(Date.parse(record.ack.at) / 1000)}:R>`);
   } else if (record.discord?.sent || record.sms?.sent) {
-    bits.push('⏳ waiting on the client to confirm the date');
+    bits.push('⏳ no reply from the client yet');
   }
   if (record.status === 'cancelled') bits.push('🗑 discarded');
   return bits.join('\n');
@@ -138,6 +158,17 @@ export function buildReviewEmbed(record) {
       value: truncate(draft.warnings.map((item) => `• ${item}`).join('\n'), 1024),
     });
   }
+  const read = readFromLine(draft);
+  if (read) embed.addFields({ name: 'Read from', value: truncate(read, 1024) });
+
+  if (draft.update?.text) {
+    const who = draft.update.author ? ` — ${draft.update.author}` : '';
+    embed.addFields({
+      name: `📋 The Trello update${who}`,
+      value: truncate(`>>> ${draft.update.text.replace(/\n/g, '\n')}`, 1024),
+    });
+  }
+
   const status = statusLine(record);
   if (status) embed.addFields({ name: 'Status', value: truncate(status, 1024) });
   if (config.dryRun) {

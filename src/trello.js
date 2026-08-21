@@ -1,7 +1,9 @@
 import { readFile } from 'node:fs/promises';
 import { config } from './config.js';
+import { extractFromComments } from './parse-update.js';
 
-const API = 'https://api.trello.com/1';
+// Overridable so the whole fetch path can be exercised against a stub server.
+const API = process.env.TRELLO_API_BASE || 'https://api.trello.com/1';
 
 let fieldMapPromise = null;
 
@@ -113,7 +115,28 @@ export function mapCustomFields(definitions, items, fieldMap) {
   return { fields, extra, unmatched };
 }
 
-/** Everything we know about a card, ready for message building. */
+/** The card's comment history, newest first. */
+export async function loadComments(cardId, limit = 25) {
+  const actions = await trelloFetch(`/cards/${cardId}/actions`, {
+    filter: 'commentCard',
+    limit: Math.min(limit, 50),
+  });
+  return (actions || []).map((action) => ({
+    id: action.id,
+    text: action.data?.text || '',
+    date: action.date || '',
+    author: action.memberCreator?.fullName || action.memberCreator?.username || '',
+  }));
+}
+
+/**
+ * Everything we know about a card, ready for message building.
+ *
+ * Both sources are read: the custom fields, and the systems person's
+ * setup-complete comment. The comment is what she actually writes today, so
+ * the bot has to understand it; the fields, where a board has them, are the
+ * explicit version and win on any disagreement.
+ */
 export async function loadCard(cardRef) {
   const id = parseCardRef(cardRef);
   const card = await trelloFetch(`/cards/${id}`, {
@@ -123,7 +146,12 @@ export async function loadCard(cardRef) {
     members: 'true',
     member_fields: 'fullName,username',
   });
-  const definitions = await trelloFetch(`/boards/${card.idBoard}/customFields`);
+
+  const [definitions, comments] = await Promise.all([
+    trelloFetch(`/boards/${card.idBoard}/customFields`).catch(() => []),
+    loadComments(card.id).catch(() => []),
+  ]);
+
   const fieldMap = await loadFieldMap();
   const { fields, extra, unmatched } = mapCustomFields(
     definitions,
@@ -142,6 +170,8 @@ export async function loadCard(cardRef) {
     fields,
     extra,
     unmatchedFieldNames: unmatched,
+    comments,
+    update: extractFromComments(comments),
   };
 }
 

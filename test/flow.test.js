@@ -199,8 +199,8 @@ test('silence past the follow-up window raises it once, not repeatedly', async (
     assert.equal(await runFollowupSweep(client, store), 1);
     const nudge = sends.find((entry) => entry.channelId === REVIEW_CHANNEL);
     assert.ok(nudge, 'the team is nudged');
-    assert.match(nudge.payload.content, /no reply on Discord yet/);
-    assert.match(nudge.payload.content, /still unconfirmed/);
+    assert.match(nudge.payload.content, /no reply on Discord/);
+    assert.match(nudge.payload.content, /No sign they have seen their go-live notice/);
 
     // Second sweep must stay quiet.
     const before = sends.length;

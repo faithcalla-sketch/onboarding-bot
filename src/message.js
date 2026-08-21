@@ -60,10 +60,78 @@ function looksLikeSheet(url) {
   return /^https:\/\/docs\.google\.com\/spreadsheets\//i.test(String(url || '').trim());
 }
 
+export const SOURCE_LABELS = {
+  command: 'the command',
+  field: 'a Trello field',
+  update: 'the update comment',
+  card: 'the card itself',
+};
+
+/**
+ * Decide where each value comes from, and remember which source won.
+ *
+ * A Trello custom field is somebody deliberately writing the value in a named
+ * box, so it beats the same value inferred from prose. The update comment is
+ * what the systems person actually writes today, so it is what makes the bot
+ * work on a board with no custom fields at all.
+ */
+export function resolveValues(card, { dateOverride = '', channelOverride = '' } = {}) {
+  const fields = card.fields || {};
+  const update = card.update || null;
+  const parsed = update?.values || {};
+  const values = {};
+  const sources = {};
+
+  const pick = (key, candidates) => {
+    for (const [source, value] of candidates) {
+      const clean = typeof value === 'string' ? value.trim() : value;
+      if (clean) {
+        values[key] = clean;
+        sources[key] = source;
+        return;
+      }
+    }
+  };
+
+  pick('goLiveDate', [
+    ['command', dateOverride],
+    ['field', fields.goLiveDate],
+    ['update', parsed.goLiveDate],
+    ['card', card.due],
+  ]);
+  pick('channelId', [
+    ['command', channelOverride],
+    ['field', fields.discordChannelId],
+    ['update', parsed.channelId],
+  ]);
+  pick('channelName', [['update', parsed.channelName]]);
+  pick('sheetUrl', [
+    ['field', fields.sheetUrl],
+    ['update', parsed.sheetUrl],
+  ]);
+  pick('clientName', [
+    ['field', fields.clientName],
+    ['update', parsed.clientName],
+    ['card', card.name],
+  ]);
+  pick('agentPhone', [
+    ['field', fields.agentPhone],
+    ['update', parsed.agentPhone],
+  ]);
+  pick('agentDiscordId', [['field', fields.agentDiscordId]]);
+  pick('agentName', [['field', fields.agentName]]);
+  pick('campaignName', [['field', fields.campaignName]]);
+  pick('goLiveTime', [['field', fields.goLiveTime]]);
+  pick('timezoneLabel', [['field', fields.timezoneLabel]]);
+  pick('hubUrl', [['field', fields.hubUrl]]);
+
+  return { values, sources, update };
+}
+
 /**
  * Turn a Trello card into a ready-to-review draft.
- * Never throws on bad card data: problems are collected so the review embed can
- * explain exactly which Trello field needs fixing.
+ * Never throws on bad card data: problems are collected so the review card can
+ * say exactly what to fix, rather than failing with a stack trace.
  */
 export async function buildDraft({
   card,
@@ -72,33 +140,52 @@ export async function buildDraft({
   timezone = config.defaultTimezone,
   now = new Date(),
   messages,
+  resolveChannel,
 }) {
   const copy = messages || (await loadMessages());
-  const fields = card.fields || {};
+  const { values, sources, update } = resolveValues(card, { dateOverride, channelOverride });
   const problems = [];
   const warnings = [];
 
-  const clientName = (fields.clientName || card.name || '').trim();
-  const campaignName = (fields.campaignName || '').trim();
-  const agentName = (fields.agentName || '').trim();
-  const sheetUrl = (fields.sheetUrl || '').trim();
-  const hubUrl = (fields.hubUrl || '').trim();
-  const goLiveTime = (fields.goLiveTime || '').trim();
-  const timezoneLabel = (fields.timezoneLabel || '').trim();
+  const clientName = values.clientName || '';
+  const campaignName = values.campaignName || '';
+  const agentName = values.agentName || '';
+  const sheetUrl = values.sheetUrl || '';
+  const hubUrl = values.hubUrl || '';
+  const goLiveTime = values.goLiveTime || '';
+  const timezoneLabel = values.timezoneLabel || '';
 
-  const channelId =
-    normalizeSnowflake(channelOverride) || normalizeSnowflake(fields.discordChannelId);
-  const agentDiscordId = normalizeSnowflake(fields.agentDiscordId);
-  const phone = normalizePhone(fields.agentPhone);
+  const agentDiscordId = normalizeSnowflake(values.agentDiscordId);
+  const phone = normalizePhone(values.agentPhone);
 
-  // --- go-live date -------------------------------------------------------
+  // --- where to post -------------------------------------------------------
+  // A channel written as "#jando-setup" only becomes an ID once we can ask
+  // Discord. Without a resolver (the check-card CLI) the answer is unknown
+  // rather than no, and unknown must not read as a failure.
+  const canResolveChannels = typeof resolveChannel === 'function';
+  let channelId = normalizeSnowflake(values.channelId);
+  const channelName = values.channelName || '';
+  if (!channelId && channelName && canResolveChannels) {
+    const resolved = await resolveChannel(channelName).catch(() => null);
+    if (resolved) {
+      channelId = resolved;
+      sources.channelId = sources.channelName || 'update';
+    }
+  }
+  const channelUnresolved = Boolean(channelName) && !channelId;
+  if (channelUnresolved && canResolveChannels) {
+    warnings.push(
+      `The update names #${channelName}, but no channel by that name is visible to the bot. Check the name, or pass \`channel:\` on the command.`,
+    );
+  }
+
+  // --- go-live date --------------------------------------------------------
   const today = todayInZone(timezone, now);
   let goLiveDate = null;
-  const dateSource = dateOverride ? 'command' : fields.goLiveDate ? 'card' : card.due ? 'due' : null;
-  const rawDate = dateOverride || fields.goLiveDate || card.due || '';
+  const rawDate = values.goLiveDate || '';
   if (!rawDate) {
     problems.push(
-      'No go-live date. Set the "Go Live Date" field on the Trello card, or pass `date:` on the command.',
+      'No go-live date. Say "ready to go live on <date>" in the Trello update, set a "Go Live Date" field, or pass `date:` on the command.',
     );
   } else {
     try {
@@ -108,45 +195,57 @@ export async function buildDraft({
     }
   }
   if (goLiveDate) {
-    const delta = relativeLabel(goLiveDate, today);
+    if (sources.goLiveDate === 'update' && update && !update.goLiveDateConfident) {
+      warnings.push(
+        `The update never says "go live on …", so ${formatLong(goLiveDate)} was read from a date found in the text. Worth a check.`,
+      );
+    }
     if (goLiveDate < today) {
-      warnings.push(`Go-live date is in the past (${delta}). Double-check before sending.`);
+      warnings.push(
+        `The go-live date is in the past (${relativeLabel(goLiveDate, today)}). Double-check before sending.`,
+      );
     } else if (goLiveDate === today) {
-      warnings.push('Go-live is today — make sure the client has enough notice.');
+      warnings.push('Go-live is today — make sure that is right.');
     }
     if (isWeekend(goLiveDate)) {
       warnings.push(`${weekdayName(goLiveDate)} is a weekend — confirm that is intended.`);
     }
   }
 
-  // --- sheet --------------------------------------------------------------
+  // --- sheet ---------------------------------------------------------------
   if (!sheetUrl) {
-    problems.push('No Google Sheet link. Set the "Google Sheet" field on the Trello card.');
+    problems.push('No Google Sheet link — none in the Trello update, and no "Google Sheet" field.');
   } else if (!looksLikeSheet(sheetUrl)) {
     warnings.push('The sheet link is not a docs.google.com/spreadsheets URL — check it points where you expect.');
   }
 
-  // --- delivery routes ----------------------------------------------------
-  if (!channelId) {
+  // --- delivery routes -----------------------------------------------------
+  if (!channelId && !channelName) {
     warnings.push(
-      'No Discord channel on the card, so Discord delivery is unavailable. Set "Discord Channel ID", or pass `channel:` on the command.',
+      'No Discord channel on the card, so Discord delivery is unavailable. Ask for the channel in the update, or pass `channel:` on the command.',
     );
   }
-  if (!phone) {
-    if (fields.agentPhone) {
-      warnings.push(`Could not read "${fields.agentPhone}" as a phone number, so SMS is unavailable.`);
+  if (!phone && config.ringcentral.enabled) {
+    if (values.agentPhone) {
+      warnings.push(`Could not read "${values.agentPhone}" as a phone number, so SMS is unavailable.`);
     } else {
-      warnings.push('No phone number on the card, so the SMS fallback is unavailable.');
+      warnings.push('No phone number for this client, so the SMS fallback is unavailable.');
     }
   }
-  if (!channelId && !phone) {
-    problems.push('No way to reach this client: the card has neither a Discord channel nor a usable phone number.');
+  // Unknown-but-named channels are excluded: only claim there is no way to
+  // reach the client when we have actually looked.
+  if (!channelId && !phone && !(channelUnresolved && !canResolveChannels)) {
+    problems.push(
+      'No way to reach this client: no Discord channel the bot can see, and no usable phone number.',
+    );
   }
-  if (!agentDiscordId && channelId) {
-    warnings.push('No agent Discord ID, so the message will not @mention anyone in the channel.');
+  if (!update && !Object.keys(card.fields || {}).length) {
+    warnings.push(
+      'No setup-complete update was found on this card, and it has no custom fields — everything below came from the card itself.',
+    );
   }
 
-  // --- copy ---------------------------------------------------------------
+  // --- copy ----------------------------------------------------------------
   const shared = {
     clientName,
     agentName,
@@ -154,6 +253,7 @@ export async function buildDraft({
     goLiveLong: goLiveDate ? formatLong(goLiveDate) : '',
     goLiveShort: goLiveDate ? formatShort(goLiveDate) : '',
     goLiveWeekday: goLiveDate ? weekdayName(goLiveDate) : '',
+    // "which is tomorrow" — the way the team says it out loud.
     goLiveRelative: goLiveDate ? relativeLabel(goLiveDate, today) : '',
     goLiveTime,
     timezoneLabel,
@@ -193,13 +293,22 @@ export async function buildDraft({
     agentDiscordId,
     phone,
     channelId,
+    channelName,
+    channelResolved: canResolveChannels,
     sheetUrl,
     hubUrl,
     goLiveDate,
     goLiveTime,
     timezoneLabel,
-    dateSource,
     rawDate,
+    sources,
+    update: update
+      ? {
+          text: update.anchor.text,
+          author: update.anchor.author,
+          date: update.anchor.date,
+        }
+      : null,
     timezone,
     discordBody,
     smsBody,

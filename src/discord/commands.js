@@ -31,11 +31,41 @@ export const commands = [
     .toJSON(),
   new SlashCommandBuilder()
     .setName('pending')
-    .setDescription('Show go-live dates the clients have not confirmed yet')
+    .setDescription('Show clients who have not replied to their go-live notice')
     .toJSON(),
 ];
 
 const EPHEMERAL = { flags: MessageFlags.Ephemeral };
+
+/**
+ * The systems person writes the channel as "#jando-setup", not as an ID, so
+ * turn a name into a channel. An ambiguous name resolves to nothing rather
+ * than to a guess — posting a client's details in the wrong channel is worse
+ * than not posting at all.
+ */
+function makeChannelResolver(client) {
+  return async (name) => {
+    const guild = await client.guilds.fetch(config.discord.guildId).catch(() => null);
+    if (!guild) return null;
+    const channels = await guild.channels.fetch().catch(() => null);
+    if (!channels) return null;
+
+    const wanted = String(name).toLowerCase();
+    const textChannels = [...channels.values()].filter(
+      (channel) => channel && typeof channel.name === 'string' && channel.isTextBased?.(),
+    );
+
+    const exact = textChannels.filter((channel) => channel.name.toLowerCase() === wanted);
+    if (exact.length === 1) return exact[0].id;
+    if (exact.length > 1) return null;
+
+    const prefix = textChannels.filter((channel) => channel.name.toLowerCase().startsWith(wanted));
+    if (prefix.length === 1) return prefix[0].id;
+
+    const contains = textChannels.filter((channel) => channel.name.toLowerCase().includes(wanted));
+    return contains.length === 1 ? contains[0].id : null;
+  };
+}
 
 async function requireApprover(interaction) {
   if (isApprover(interaction.user.id)) return true;
@@ -62,7 +92,12 @@ async function handleNotify(interaction, { store, client }) {
     return;
   }
 
-  const draft = await buildDraft({ card, dateOverride, channelOverride });
+  const draft = await buildDraft({
+    card,
+    dateOverride,
+    channelOverride,
+    resolveChannel: makeChannelResolver(client),
+  });
 
   const reviewChannel = await client.channels
     .fetch(config.discord.reviewChannelId)
@@ -101,7 +136,7 @@ async function handlePending(interaction, { store }) {
     .sort((a, b) => String(a.draft.goLiveDate).localeCompare(String(b.draft.goLiveDate)));
 
   if (!open.length) {
-    await interaction.editReply('✅ Nothing outstanding — every client has confirmed.');
+    await interaction.editReply('✅ Nothing outstanding — every client has come back to us.');
     return;
   }
 
@@ -120,7 +155,7 @@ async function handlePending(interaction, { store }) {
 
   const body = lines.join('\n');
   await interaction.editReply(
-    `**${open.length} unconfirmed go-live${open.length === 1 ? '' : 's'}**\n${body.slice(0, 3800)}`,
+    `**${open.length} go-live notice${open.length === 1 ? '' : 's'} with no reply yet**\n${body.slice(0, 3800)}`,
   );
 }
 

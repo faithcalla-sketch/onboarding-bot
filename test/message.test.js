@@ -39,7 +39,9 @@ test('a complete card produces a sendable draft', async () => {
   assert.match(draft.discordBody, /<@123456789012345678>/);
   assert.match(draft.discordBody, /Friday, August 21, 2026/);
   assert.match(draft.discordBody, /docs\.google\.com\/spreadsheets\/d\/abc\/edit/);
-  assert.match(draft.discordBody, /confirm Friday/);
+  assert.match(draft.discordBody, /ready for your launch on/);
+  // The date was agreed with the CSR already — this must not re-open it.
+  assert.doesNotMatch(draft.discordBody, /could you confirm|does .* work|let us know if that works/i);
 });
 
 test('the SMS says the same thing without Discord markup', async () => {
@@ -58,7 +60,7 @@ test('a command-line date beats the card, and is recorded as such', async () => 
     timezone: TZ,
   });
   assert.equal(draft.goLiveDate, '2026-08-24');
-  assert.equal(draft.dateSource, 'command');
+  assert.equal(draft.sources.goLiveDate, 'command');
   assert.match(draft.discordBody, /Monday, August 24, 2026/);
 });
 
@@ -88,6 +90,7 @@ test('a past or weekend go-live is a warning, not a block', async () => {
 
 test('no Discord channel disables Discord but keeps SMS on the table', async () => {
   const draft = await build({ fields: { discordChannelId: '' } });
+  assert.equal(draft.channelId, null);
   assert.equal(draft.canSendDiscord, false);
   assert.deepEqual(draft.problems, []);
   assert.match(draft.warnings.join(' '), /Discord delivery is unavailable/);
@@ -96,7 +99,7 @@ test('no Discord channel disables Discord but keeps SMS on the table', async () 
 
 test('no channel and no phone is a hard stop', async () => {
   const draft = await build({ fields: { discordChannelId: '', agentPhone: '' } });
-  assert.match(draft.problems.join(' '), /neither a Discord channel nor a usable phone/);
+  assert.match(draft.problems.join(' '), /no Discord channel the bot can see, and no usable phone/);
 });
 
 test('the go-live time and timezone label are carried into both messages', async () => {
@@ -107,13 +110,13 @@ test('the go-live time and timezone label are carried into both messages', async
 
 test('a card with no campaign still reads naturally', async () => {
   const draft = await build({ fields: { campaignName: '' } });
-  assert.match(draft.discordBody, /Your setup is complete on our end/);
+  assert.match(draft.discordBody, /your setup is complete on our end/);
 });
 
-test('a card with no agent ID sends without an @mention, and says so', async () => {
+test('a card with no agent ID still sends, addressed by name', async () => {
   const draft = await build({ fields: { agentDiscordId: '' } });
   assert.match(draft.discordBody, /Hey Dana/);
-  assert.match(draft.warnings.join(' '), /will not @mention/);
+  assert.equal(draft.agentDiscordId, null);
   assert.equal(draft.canSendDiscord, true);
 });
 
@@ -148,7 +151,7 @@ test('the card due date is the last resort for a go-live date', async () => {
     timezone: TZ,
   });
   assert.equal(draft.goLiveDate, '2026-08-25');
-  assert.equal(draft.dateSource, 'due');
+  assert.equal(draft.sources.goLiveDate, 'card');
 });
 
 test('over-long copy is caught before Discord rejects it', async () => {
@@ -164,4 +167,128 @@ test('over-long copy is caught before Discord rejects it', async () => {
   });
   assert.match(draft.problems.join(' '), /limit is 2000/);
   assert.equal(draft.canSendDiscord, false);
+});
+
+// --- the path that actually matters: a card with no custom fields at all, -----
+// --- just the systems person's update comment. -------------------------------
+
+import { extractFromComments } from '../src/parse-update.js';
+
+const REAL_UPDATE = `OTP FX on this show hub setup is complete for Jando
+Fire the test in the Discord channel and you will see to ensure it is working properly
+Added email SMS notification
+Client is ready to go live on Friday, August 21
+https://docs.google.com/spreadsheets/d/1AbCdEf/edit
+#jando-setup`;
+
+function commentCard(text = REAL_UPDATE, overrides = {}) {
+  const comments = [
+    { id: 'c1', date: '2026-08-20T14:00:00Z', author: 'Systems', text },
+  ];
+  return {
+    id: 'card9',
+    name: 'Jando',
+    url: 'https://trello.com/c/ZzZz9999',
+    listName: 'Done',
+    due: '',
+    fields: {},
+    comments,
+    update: extractFromComments(comments),
+    ...overrides,
+  };
+}
+
+test('a card with only an update comment produces a complete message', async () => {
+  const draft = await buildDraft({
+    card: commentCard(),
+    now: NOW,
+    timezone: TZ,
+    resolveChannel: async (name) => (name === 'jando-setup' ? '987654321098765432' : null),
+  });
+
+  assert.deepEqual(draft.problems, []);
+  assert.deepEqual(draft.warnings, []);
+  assert.equal(draft.clientName, 'Jando');
+  assert.equal(draft.goLiveDate, '2026-08-21');
+  assert.equal(draft.sheetUrl, 'https://docs.google.com/spreadsheets/d/1AbCdEf/edit');
+  assert.equal(draft.channelId, '987654321098765432');
+  assert.equal(draft.canSendDiscord, true);
+
+  assert.match(draft.discordBody, /ready for your launch on \*\*Friday, August 21, 2026\*\* \(tomorrow\)/);
+  assert.match(draft.discordBody, /1AbCdEf/);
+});
+
+test('the message re-confirms a date instead of asking for one', async () => {
+  const draft = await buildDraft({ card: commentCard(), now: NOW, timezone: TZ });
+  assert.match(draft.discordBody, /re-confirm your live date/);
+  assert.match(draft.discordBody, /Nothing needed from you/);
+  assert.doesNotMatch(draft.discordBody, /could you confirm|please confirm|does that work/i);
+  assert.doesNotMatch(draft.smsBody, /please confirm|reply to confirm/i);
+});
+
+test('none of the internal checklist wording reaches the client', async () => {
+  const draft = await buildDraft({ card: commentCard(), now: NOW, timezone: TZ });
+  for (const body of [draft.discordBody, draft.smsBody, draft.smsNudgeBody]) {
+    assert.doesNotMatch(body, /fire the test/i);
+    assert.doesNotMatch(body, /email sms notification/i);
+    assert.doesNotMatch(body, /OTP FX/i);
+    assert.doesNotMatch(body, /hub setup/i);
+  }
+});
+
+test('every value remembers which source it came from', async () => {
+  const draft = await buildDraft({
+    card: commentCard(),
+    now: NOW,
+    timezone: TZ,
+    resolveChannel: async () => '987654321098765432',
+  });
+  assert.equal(draft.sources.goLiveDate, 'update');
+  assert.equal(draft.sources.sheetUrl, 'update');
+  assert.equal(draft.sources.clientName, 'update');
+  assert.ok(draft.update?.text.includes('hub setup is complete'), 'the update is kept for review');
+});
+
+test('a Trello field beats the same value parsed out of prose', async () => {
+  const card = commentCard();
+  card.fields = { goLiveDate: '2026-08-24', sheetUrl: 'https://docs.google.com/spreadsheets/d/FIELD/edit' };
+  const draft = await buildDraft({ card, now: NOW, timezone: TZ });
+  assert.equal(draft.goLiveDate, '2026-08-24');
+  assert.equal(draft.sources.goLiveDate, 'field');
+  assert.match(draft.sheetUrl, /FIELD/);
+  assert.equal(draft.sources.sheetUrl, 'field');
+});
+
+test('a date the update never announced is flagged for a second look', async () => {
+  const card = commentCard('Hub setup is complete for Jando. 8/24 is the day. https://docs.google.com/spreadsheets/d/x/edit #jando-setup');
+  const draft = await buildDraft({
+    card,
+    now: NOW,
+    timezone: TZ,
+    resolveChannel: async () => '987654321098765432',
+  });
+  assert.equal(draft.goLiveDate, '2026-08-24');
+  assert.match(draft.warnings.join(' '), /never says "go live on/);
+  assert.equal(draft.canSendDiscord, true, 'a warning does not block the send');
+});
+
+test('a channel name the bot cannot find is a warning, not a wrong-channel post', async () => {
+  const draft = await buildDraft({
+    card: commentCard(),
+    now: NOW,
+    timezone: TZ,
+    resolveChannel: async () => null,
+  });
+  assert.equal(draft.channelId, null);
+  assert.equal(draft.canSendDiscord, false);
+  assert.match(draft.warnings.join(' '), /#jando-setup/);
+});
+
+test('a card with no update and no fields says so rather than sending something empty', async () => {
+  const card = commentCard('bumping this card');
+  const draft = await buildDraft({ card, now: NOW, timezone: TZ });
+  assert.equal(draft.update, null);
+  assert.match(draft.problems.join(' '), /No go-live date/);
+  assert.match(draft.problems.join(' '), /No Google Sheet link/);
+  assert.match(draft.warnings.join(' '), /No setup-complete update was found/);
 });

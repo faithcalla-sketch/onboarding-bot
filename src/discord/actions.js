@@ -97,8 +97,9 @@ export async function refreshReviewMessage(client, record) {
 }
 
 /**
- * The client answered in their channel. That is the confirmation we were after,
- * so stop chasing them and tell the team.
+ * The client answered in their channel. Nothing was being asked of them, so a
+ * reply is not an approval - it is proof the notice landed, and sometimes a
+ * change of plan. Either way: stop chasing, and put it in front of the team.
  */
 export async function recordAck(client, store, record, message) {
   const updated = await store.update(record.id, {
@@ -165,16 +166,16 @@ export async function runFollowupSweep(client, store) {
       );
     }
 
-    const who = record.draft.agentName || record.draft.clientName || record.draft.cardName;
+    const who = record.draft.clientName || record.draft.agentName || record.draft.cardName;
     const reason = record.sms?.sent
-      ? 'no reply on Discord or to the text yet'
+      ? 'no reply on Discord or to the text'
       : canText
-        ? 'no reply on Discord yet'
-        : 'no reply on Discord yet, and there is no usable number on the card';
+        ? 'no reply on Discord — they may not be in the channel'
+        : 'no reply on Discord, and there is no usable number to text';
 
     await channel
       .send({
-        content: `⏳ **${who}** — ${reason} (${config.followupHours}h since we sent it). Their go-live is still unconfirmed.`,
+        content: `⏳ **${who}** — ${reason} (${config.followupHours}h since we posted it). No sign they have seen their go-live notice.`,
         components: row.components.length ? [row] : [],
         allowedMentions: { parse: [] },
       })
